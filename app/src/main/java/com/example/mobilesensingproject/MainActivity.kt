@@ -2,6 +2,7 @@ package com.example.mobilesensingproject
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.media.MediaRecorder
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
@@ -20,7 +21,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         // Audio recordings will get saved to /genreGuesser
-        var storagePath = Environment.getExternalStorageDirectory().toString()+"/genreGuesser.mp3"
+        var storagePath = applicationContext.filesDir.absolutePath + "/genreGuesser.mp3"
         mr = MediaRecorder()
 
         recordButton = findViewById(R.id.button)
@@ -34,7 +35,8 @@ class MainActivity : AppCompatActivity() {
         // Request permission to record audio and save audio files
         if(ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.WRITE_EXTERNAL_STORAGE), 111)
-        recordButton.isEnabled = true
+        else
+            recordButton.isEnabled = true
 
         // Record audio when record button is clicked
         recordButton.setOnClickListener{
@@ -56,6 +58,15 @@ class MainActivity : AppCompatActivity() {
         stopButton.setOnClickListener{
             mr.stop()
             recordButton.isEnabled = true
+            stopButton.isEnabled = false
+        }
+
+        // Play back when play button is clicked
+        playButton.setOnClickListener{
+            var mp = MediaPlayer()
+            mp.setDataSource(storagePath)
+            mp.prepare()
+            mp.start()
         }
     }
 
