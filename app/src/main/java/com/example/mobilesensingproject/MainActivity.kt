@@ -9,6 +9,9 @@ import android.os.Bundle
 import android.os.Environment
 import android.widget.Button
 import androidx.core.app.ActivityCompat
+import java.io.FileInputStream
+import java.nio.MappedByteBuffer
+import java.nio.channels.FileChannel
 
 class MainActivity : AppCompatActivity() {
 
@@ -16,6 +19,8 @@ class MainActivity : AppCompatActivity() {
     lateinit var stopButton: Button
     lateinit var playButton: Button
     lateinit var mr: MediaRecorder
+    lateinit var yamNetModel: MappedByteBuffer
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -37,6 +42,18 @@ class MainActivity : AppCompatActivity() {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.WRITE_EXTERNAL_STORAGE), 111)
         else
             recordButton.isEnabled = true
+
+        // Load the YamNet model from the assets folder
+        try {
+            val assetFileDescriptor = assets.openFd("lite-model_yamnet_tflite_1.tflite")
+            val inputStream = FileInputStream(assetFileDescriptor.fileDescriptor)
+            val fileChannel = inputStream.channel
+            val startOffset = assetFileDescriptor.startOffset
+            val declaredLength = assetFileDescriptor.declaredLength
+            yamNetModel = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         // Record audio when record button is clicked
         recordButton.setOnClickListener{
@@ -80,6 +97,7 @@ class MainActivity : AppCompatActivity() {
         if(requestCode == 111 && grantResults[0] == PackageManager.PERMISSION_GRANTED)
             recordButton.isEnabled = true
     }
+
 
 
 }
