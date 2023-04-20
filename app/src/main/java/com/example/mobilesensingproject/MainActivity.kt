@@ -8,7 +8,13 @@ import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Environment
 import android.widget.Button
+import android.widget.Toast
 import androidx.core.app.ActivityCompat
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
+import java.nio.MappedByteBuffer
+import java.nio.channels.FileChannel
 
 class MainActivity : AppCompatActivity() {
 
@@ -16,6 +22,8 @@ class MainActivity : AppCompatActivity() {
     lateinit var stopButton: Button
     lateinit var playButton: Button
     lateinit var mr: MediaRecorder
+    lateinit var yamNetModel: MappedByteBuffer
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -38,6 +46,18 @@ class MainActivity : AppCompatActivity() {
         else
             recordButton.isEnabled = true
 
+        // Load the YamNet model from the assets folder
+        try {
+            val assetFileDescriptor = assets.openFd("lite-model_yamnet_tflite_1.tflite")
+            val inputStream = FileInputStream(assetFileDescriptor.fileDescriptor)
+            val fileChannel = inputStream.channel
+            val startOffset = assetFileDescriptor.startOffset
+            val declaredLength = assetFileDescriptor.declaredLength
+            yamNetModel = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // Record audio when record button is clicked
         recordButton.setOnClickListener{
             mr.setAudioSource(MediaRecorder.AudioSource.MIC)
@@ -57,6 +77,15 @@ class MainActivity : AppCompatActivity() {
         // Stop recording when stop button is clicked
         stopButton.setOnClickListener{
             mr.stop()
+
+            // Feed the YamNet model
+            val audioBuffer = loadAudioFile(storagePath)
+//            val results = runYamNet(audioBuffer)
+//            val topResult = getTopResult(results)
+
+            // Display guess in label
+//            Toast.makeText(this, "Genre guess: ${topResult.label}", Toast.LENGTH_SHORT).show()
+
             recordButton.isEnabled = true
             stopButton.isEnabled = false
         }
@@ -69,6 +98,21 @@ class MainActivity : AppCompatActivity() {
             mp.start()
         }
     }
+    // Audio needs to be in byteArray form for yamNet to read it
+    private fun loadAudioFile(path: String): ByteArray {
+        val file = File(path)
+        val inputStream = FileInputStream(file)
+        val outputStream = ByteArrayOutputStream()
+        val buffer = ByteArray(1024)
+        var length: Int
+        while (inputStream.read(buffer).also { length = it } != -1) {
+            outputStream.write(buffer, 0, length)
+        }
+        outputStream.close()
+        inputStream.close()
+        return outputStream.toByteArray()
+    }
+
 
     // If the user gives permission to record, enable recordButton
     override fun onRequestPermissionsResult(
@@ -80,6 +124,7 @@ class MainActivity : AppCompatActivity() {
         if(requestCode == 111 && grantResults[0] == PackageManager.PERMISSION_GRANTED)
             recordButton.isEnabled = true
     }
+
 
 
 }
