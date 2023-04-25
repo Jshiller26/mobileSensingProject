@@ -84,7 +84,7 @@ class MainActivity : AppCompatActivity() {
             // Feed the YamNet model
             val audioBuffer = loadAudioFile(storagePath)
             val results = runYamNet(audioBuffer)
-//            val topResult = getTopResult(results)
+            val topResult = getTopResult(results)
 
             // Display guess in label
 //            Toast.makeText(this, "Genre guess: ${topResult.label}", Toast.LENGTH_SHORT).show()
@@ -149,6 +149,14 @@ class MainActivity : AppCompatActivity() {
         return results
     }
 
+    private fun getTopResult(results: Array<FloatArray>): Pair<Float, String> {
+        // Get the index of the maximum value in the results array
+        val maxIndex = results.indices.maxByOrNull { results[it][0] } ?: -1
+
+        // Return the result at the maximum index
+        // Will return confidence score and label of sound playing
+        return Pair(results[maxIndex][0], results[maxIndex][1].toString())
+    }
 
     // If the user gives permission to record, enable recordButton
     override fun onRequestPermissionsResult(
