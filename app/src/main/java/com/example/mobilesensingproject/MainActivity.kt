@@ -10,9 +10,12 @@ import android.os.Environment
 import android.widget.Button
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
+import org.tensorflow.lite.Interpreter
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
@@ -80,7 +83,7 @@ class MainActivity : AppCompatActivity() {
 
             // Feed the YamNet model
             val audioBuffer = loadAudioFile(storagePath)
-//            val results = runYamNet(audioBuffer)
+            val results = runYamNet(audioBuffer)
 //            val topResult = getTopResult(results)
 
             // Display guess in label
@@ -111,6 +114,39 @@ class MainActivity : AppCompatActivity() {
         outputStream.close()
         inputStream.close()
         return outputStream.toByteArray()
+    }
+
+    // Run the yamNet model on the converted audio and return results
+    private fun runYamNet(audioBuffer: ByteArray): Array<FloatArray> {
+        // Run the yamNet model with interpreter
+        val yamNet = Interpreter(yamNetModel)
+        // Get tensor models shape and size
+        val inputShape = yamNet.getInputTensor(0).shape()
+        val inputSize = inputShape[1]
+        val outputSize = yamNet.getOutputTensor(0).shape()[1]
+
+        // Allocate a direct ByteBuffer and
+        // Order the bytes in native byte order and create a ShortBuffer
+        val inputBuffer = ByteBuffer.allocateDirect(inputSize * 2)
+            .order(ByteOrder.nativeOrder()).asShortBuffer()
+        // Convert from bytes to shorts and put input onto the input buffeer
+        for (i in 0 until inputSize) {
+            val x = (audioBuffer[i * 2 + 1].toInt() shl 8) or (audioBuffer[i * 2].toInt() and 0xff)
+            inputBuffer.put(x.toShort())
+        }
+
+        // Allocate a direct ByteBuffer and
+        // Order the bytes in native byte order and create a ShortBuffer
+        val outputBuffer = ByteBuffer.allocateDirect(outputSize * 4)
+            .order(ByteOrder.nativeOrder()).asFloatBuffer()
+        // Run yamNet model using input buffer and store on the output buffer
+        yamNet.run(inputBuffer, outputBuffer)
+        // store results on array of float arrays
+        val results = Array(outputSize) { FloatArray(1) }
+        for (i in 0 until outputSize) {
+            results[i][0] = outputBuffer.get(i)
+        }
+        return results
     }
 
 
