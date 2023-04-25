@@ -4,18 +4,20 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
-import android.os.Environment
 import android.widget.Button
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.FloatBuffer
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
@@ -83,14 +85,16 @@ class MainActivity : AppCompatActivity() {
 
             // Feed the YamNet model
             val audioBuffer = loadAudioFile(storagePath)
-            val results = runYamNet(audioBuffer)
-            val topResult = getTopResult(results)
+            val (results, labelMap) = runYamNet(audioBuffer)
+            val topResultPair = getTopResult(results, labelMap)
+            val label = topResultPair.second
 
             // Display guess in label
-//            Toast.makeText(this, "Genre guess: ${topResult.label}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Genre guess: $label", Toast.LENGTH_SHORT).show()
 
             recordButton.isEnabled = true
             stopButton.isEnabled = false
+            mr.release()
         }
 
         // Play back when play button is clicked
@@ -117,46 +121,60 @@ class MainActivity : AppCompatActivity() {
     }
 
     // Run the yamNet model on the converted audio and return results
-    private fun runYamNet(audioBuffer: ByteArray): Array<FloatArray> {
+    private fun runYamNet(audioBuffer: ByteArray): Pair<Array<FloatArray>, Array<String>> {
+        // Load the label file
+        val labelFile = assets.open("yamnet_class_map.csv")
+        val labelLines = labelFile.bufferedReader().readLines()
+        val labelMap = labelLines.map { line -> line.split(",")[1] }.toTypedArray()
+
         // Run the yamNet model with interpreter
         val yamNet = Interpreter(yamNetModel)
+
         // Get tensor models shape and size
         val inputShape = yamNet.getInputTensor(0).shape()
-        val inputSize = inputShape[1]
-        val outputSize = yamNet.getOutputTensor(0).shape()[1]
+        val inputLength = inputShape[0]
 
-        // Allocate a direct ByteBuffer and
-        // Order the bytes in native byte order and create a ShortBuffer
-        val inputBuffer = ByteBuffer.allocateDirect(inputSize * 2)
-            .order(ByteOrder.nativeOrder()).asShortBuffer()
-        // Convert from bytes to shorts and put input onto the input buffeer
-        for (i in 0 until inputSize) {
-            val x = (audioBuffer[i * 2 + 1].toInt() shl 8) or (audioBuffer[i * 2].toInt() and 0xff)
-            inputBuffer.put(x.toShort())
+        // Convert the ByteArray object to a ShortBuffer object
+        val shortBuffer = ByteBuffer.wrap(audioBuffer).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+
+        // Normalize the values in the ShortBuffer to the range [-1, 1]
+        val normalizationFactor = Short.MAX_VALUE.toFloat()
+        val normalizedBuffer = FloatBuffer.allocate(shortBuffer.capacity())
+        for (i in 0 until shortBuffer.capacity()) {
+            normalizedBuffer.put(i, shortBuffer.get(i) / normalizationFactor)
         }
 
-        // Allocate a direct ByteBuffer and
-        // Order the bytes in native byte order and create a ShortBuffer
-        val outputBuffer = ByteBuffer.allocateDirect(outputSize * 4)
-            .order(ByteOrder.nativeOrder()).asFloatBuffer()
+        // Convert the normalized ShortBuffer to a ByteBuffer object
+        val inputBuffer = ByteBuffer.allocateDirect(4096).order(ByteOrder.nativeOrder())
+        val floatBuffer = inputBuffer.asFloatBuffer()
+        floatBuffer.put(normalizedBuffer)
+
         // Run yamNet model using input buffer and store on the output buffer
-        yamNet.run(inputBuffer, outputBuffer)
+        val outputBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 1024), DataType.FLOAT32)
+        yamNet.run(inputBuffer, outputBuffer.buffer)
+
         // store results on array of float arrays
-        val results = Array(outputSize) { FloatArray(1) }
-        for (i in 0 until outputSize) {
-            results[i][0] = outputBuffer.get(i)
+        val results = Array(outputBuffer.floatArray.size) { FloatArray(1) }
+        for (i in results.indices) {
+            results[i][0] = outputBuffer.floatArray[i]
         }
-        return results
+
+        // Return the results and label map
+        return Pair(results, labelMap)
     }
 
-    private fun getTopResult(results: Array<FloatArray>): Pair<Float, String> {
+    private fun getTopResult(results: Array<FloatArray>, labelMap: Array<String>): Pair<Float, String> {
         // Get the index of the maximum value in the results array
         val maxIndex = results.indices.maxByOrNull { results[it][0] } ?: -1
 
-        // Return the result at the maximum index
+        // Get the label corresponding to the maximum index
+        val label = labelMap[maxIndex]
+
+        // Return the result at the maximum index along with the corresponding label
         // Will return confidence score and label of sound playing
-        return Pair(results[maxIndex][0], results[maxIndex][1].toString())
+        return Pair(results[maxIndex][0], label ?: "Unknown")
     }
+
 
     // If the user gives permission to record, enable recordButton
     override fun onRequestPermissionsResult(
@@ -168,7 +186,4 @@ class MainActivity : AppCompatActivity() {
         if(requestCode == 111 && grantResults[0] == PackageManager.PERMISSION_GRANTED)
             recordButton.isEnabled = true
     }
-
-
-
 }
