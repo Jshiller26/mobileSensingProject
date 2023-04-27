@@ -2,10 +2,14 @@ package com.example.mobilesensingproject
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -18,6 +22,7 @@ import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
@@ -28,6 +33,8 @@ class MainActivity : AppCompatActivity() {
     lateinit var playButton: Button
     lateinit var mr: MediaRecorder
     lateinit var yamNetModel: MappedByteBuffer
+    lateinit var yamnetModel: Interpreter
+    lateinit var labelList: List<String>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,51 +58,83 @@ class MainActivity : AppCompatActivity() {
         else
             recordButton.isEnabled = true
 
-        // Load the YamNet model from the assets folder
-        try {
-            val assetFileDescriptor = assets.openFd("lite-model_yamnet_tflite_1.tflite")
-            val inputStream = FileInputStream(assetFileDescriptor.fileDescriptor)
-            val fileChannel = inputStream.channel
-            val startOffset = assetFileDescriptor.startOffset
-            val declaredLength = assetFileDescriptor.declaredLength
-            yamNetModel = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        //Load yamnet model from the assets folder
+        val yamnetModelFileDescriptor = assets.openFd("lite-model_yamnet_tflite_1.tflite")
+        val inputStream = FileInputStream(yamnetModelFileDescriptor.fileDescriptor)
+        val fileChannel = inputStream.channel
+        val startOffset = yamnetModelFileDescriptor.startOffset
+        val declaredLength = yamnetModelFileDescriptor.declaredLength
+        val yamnetModelBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+        val yamnetModelOptions = Interpreter.Options()
+        yamnetModel = Interpreter(yamnetModelBuffer, yamnetModelOptions)
+
+
+        // Load the YAMNet class map from the assets folder
+        val labelFile = assets.open("yamnet_class_map.csv")
+        labelList = labelFile.bufferedReader().readLines()
+
+        // Define audio parameters
+        val audioSource = MediaRecorder.AudioSource.MIC
+        val sampleRate = 16000
+        val channelConfig = AudioFormat.CHANNEL_IN_MONO
+        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+        val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+
+        // Initialize AudioRecord object
+        val audioRecorder = AudioRecord(audioSource, sampleRate, channelConfig, audioFormat, bufferSize)
+
+        // Initialize audioProcessor
+        val audioProcessor = AudioProcessor(sampleRate, 16000, 10)
+        val audioBuffer = ByteBuffer.allocateDirect(bufferSize * 2)
+
 
         // Record audio when record button is clicked
+        // Start recording when record button is clicked
         recordButton.setOnClickListener{
-            mr.setAudioSource(MediaRecorder.AudioSource.MIC)
-            // Save audio in mp3 format to "storagePath"
-            mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            mr.setAudioEncodingBitRate(16 * 44100)
-            mr.setAudioSamplingRate(44100)
-            mr.setOutputFile(storagePath)
-            // Start recording and enable stop button
-            mr.prepare()
-            mr.start()
+            audioRecorder.startRecording()
             stopButton.isEnabled = true
             recordButton.isEnabled = false
         }
 
         // Stop recording when stop button is clicked
         stopButton.setOnClickListener{
-            mr.stop()
+            audioRecorder.stop()
+            audioRecorder.release()
 
-            // Feed the YamNet model
-            val audioBuffer = loadAudioFile(storagePath)
-            val (results, labelMap) = runYamNet(audioBuffer)
-            val topResultPair = getTopResult(results, labelMap)
-            val label = topResultPair.second
+            // Read audio data from AudioRecord object
+            audioBuffer.rewind()
+            audioRecorder.read(audioBuffer, bufferSize * 2)
+            val audioData = ByteArray(bufferSize * 2)
+            audioBuffer.rewind()
+            audioBuffer.get(audioData)
+            audioBuffer.clear()
 
-            // Display guess in label
-            Toast.makeText(this, "Genre guess: $label", Toast.LENGTH_SHORT).show()
+            val processedData = audioProcessor.process(audioData)
 
+            val outputBuffer = Array(20) { FloatArray(labelList.size - 1) }
+            yamnetModel.run(processedData, outputBuffer)
+            var maxIndex = -1
+            var maxPrediction = Float.MIN_VALUE
+            for (i in 0 until outputBuffer.size) {
+                val prediction = outputBuffer[i]
+                for (j in 0 until prediction.size) {
+                    if (prediction[j] > maxPrediction) {
+                        maxPrediction = prediction[j]
+                        maxIndex = j
+                    }
+                }
+            }
+            val prediction = labelList[maxIndex]
+            val predictedLabel = prediction.split(",")[2]
+            Log.d("GenrePrediction", prediction)
+            val genreTextView = findViewById<TextView>(R.id.textView2)
+            genreTextView.text = predictedLabel
+
+            // Enable record button
             recordButton.isEnabled = true
             stopButton.isEnabled = false
-            mr.release()
         }
+
 
         // Play back when play button is clicked
         playButton.setOnClickListener{
@@ -105,76 +144,6 @@ class MainActivity : AppCompatActivity() {
             mp.start()
         }
     }
-    // Audio needs to be in byteArray form for yamNet to read it
-    private fun loadAudioFile(path: String): ByteArray {
-        val file = File(path)
-        val inputStream = FileInputStream(file)
-        val outputStream = ByteArrayOutputStream()
-        val buffer = ByteArray(1024)
-        var length: Int
-        while (inputStream.read(buffer).also { length = it } != -1) {
-            outputStream.write(buffer, 0, length)
-        }
-        outputStream.close()
-        inputStream.close()
-        return outputStream.toByteArray()
-    }
-
-    // Run the yamNet model on the converted audio and return results
-    private fun runYamNet(audioBuffer: ByteArray): Pair<Array<FloatArray>, Array<String>> {
-        // Load the label file
-        val labelFile = assets.open("yamnet_class_map.csv")
-        val labelLines = labelFile.bufferedReader().readLines()
-        val labelMap = labelLines.map { line -> line.split(",")[1] }.toTypedArray()
-
-        // Run the yamNet model with interpreter
-        val yamNet = Interpreter(yamNetModel)
-
-        // Get tensor models shape and size
-        val inputShape = yamNet.getInputTensor(0).shape()
-        val inputLength = inputShape[0]
-
-        // Convert the ByteArray object to a ShortBuffer object
-        val shortBuffer = ByteBuffer.wrap(audioBuffer).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-
-        // Normalize the values in the ShortBuffer to the range [-1, 1]
-        val normalizationFactor = Short.MAX_VALUE.toFloat()
-        val normalizedBuffer = FloatBuffer.allocate(shortBuffer.capacity())
-        for (i in 0 until shortBuffer.capacity()) {
-            normalizedBuffer.put(i, shortBuffer.get(i) / normalizationFactor)
-        }
-
-        // Convert the normalized ShortBuffer to a ByteBuffer object
-        val inputBuffer = ByteBuffer.allocateDirect(4096).order(ByteOrder.nativeOrder())
-        val floatBuffer = inputBuffer.asFloatBuffer()
-        floatBuffer.put(normalizedBuffer)
-
-        // Run yamNet model using input buffer and store on the output buffer
-        val outputBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 1024), DataType.FLOAT32)
-        yamNet.run(inputBuffer, outputBuffer.buffer)
-
-        // store results on array of float arrays
-        val results = Array(outputBuffer.floatArray.size) { FloatArray(1) }
-        for (i in results.indices) {
-            results[i][0] = outputBuffer.floatArray[i]
-        }
-
-        // Return the results and label map
-        return Pair(results, labelMap)
-    }
-
-    private fun getTopResult(results: Array<FloatArray>, labelMap: Array<String>): Pair<Float, String> {
-        // Get the index of the maximum value in the results array
-        val maxIndex = results.indices.maxByOrNull { results[it][0] } ?: -1
-
-        // Get the label corresponding to the maximum index
-        val label = labelMap[maxIndex]
-
-        // Return the result at the maximum index along with the corresponding label
-        // Will return confidence score and label of sound playing
-        return Pair(results[maxIndex][0], label ?: "Unknown")
-    }
-
 
     // If the user gives permission to record, enable recordButton
     override fun onRequestPermissionsResult(
